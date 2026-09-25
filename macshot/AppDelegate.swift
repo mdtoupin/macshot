@@ -3016,7 +3016,7 @@ extension AppDelegate: OverlayWindowControllerDelegate {
     private func convertRecordingToGIF(_ source: URL, backingScale: CGFloat, completion: @escaping (URL) -> Void) {
         let gifName = source.deletingPathExtension().lastPathComponent + ".gif"
         let gifURL = TmpScratchDirectory.makeURL(filename: gifName)
-        let savedFPS = UserDefaults.standard.integer(forKey: VideoEditorExporter.gifFPSKey)
+        let savedFPS = UserDefaults.standard.integer(forKey: VideoExportSettings.gifFPSKey)
         let fps = (5...30).contains(savedFPS) ? savedFPS : 15
         let job = MediaExportCoordinator.shared.start(title: gifName, status: L("Exporting..."),
             operation: { cancellation, progress in
