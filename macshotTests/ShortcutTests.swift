@@ -303,7 +303,8 @@ final class HotkeyManagerTests: XCTestCase {
     func testEverySlotHasDistinctDefaultsKeys() {
         var seen = Set<String>()
         for slot in HotkeyManager.HotkeySlot.allCases {
-            for key in [slot.keyCodeKey, slot.modifiersKey, slot.disabledKey] {
+            for key in [slot.keyCodeKey, slot.modifiersKey, slot.disabledKey,
+                        slot.alternateKeyCodeKey, slot.alternateModifiersKey] {
                 XCTAssertTrue(seen.insert(key).inserted, "`\(key)` is used by two hotkey slots, so they'd overwrite each other")
             }
         }
@@ -345,6 +346,22 @@ final class HotkeyManagerTests: XCTestCase {
             HotkeyManager.disableHotkey(for: slot)
             HotkeyManager.saveHotkey(for: slot, keyCode: 15, modifiers: UInt32(cmdKey))
             XCTAssertEqual(HotkeyManager.readHotkey(for: slot).keyCode, 15)
+        }
+    }
+
+    func testAnAlternateHotkeyIsReadOnlyWhenSetAndTheSlotIsEnabled() {
+        let slot = HotkeyManager.HotkeySlot.captureArea
+        withDefaults([slot.disabledKey: nil, slot.alternateKeyCodeKey: nil, slot.alternateModifiersKey: nil]) {
+            XCTAssertNil(HotkeyManager.readAlternateHotkey(for: slot), "no second shortcut unless one is stored")
+
+            UserDefaults.standard.set(12, forKey: slot.alternateKeyCodeKey)
+            UserDefaults.standard.set(Int(cmdKey), forKey: slot.alternateModifiersKey)
+            let alt = HotkeyManager.readAlternateHotkey(for: slot)
+            XCTAssertEqual(alt?.keyCode, 12)
+            XCTAssertEqual(alt?.modifiers, UInt32(cmdKey))
+
+            HotkeyManager.disableHotkey(for: slot)
+            XCTAssertNil(HotkeyManager.readAlternateHotkey(for: slot), "disabling the action disables both shortcuts")
         }
     }
 

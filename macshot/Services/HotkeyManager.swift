@@ -64,6 +64,10 @@ class HotkeyManager {
             return "hotkeyDisabled_\(rawValue)"
         }
 
+        /// Optional second shortcut for the same action (UserDefaults only, no Settings UI).
+        var alternateKeyCodeKey: String { keyCodeKey + "Alt" }
+        var alternateModifiersKey: String { modifiersKey + "Alt" }
+
         var label: String {
             switch self {
             case .captureArea: return L("Capture Area")
@@ -109,8 +113,12 @@ class HotkeyManager {
     }
 
     private var hotKeyRefs: [HotkeySlot: EventHotKeyRef] = [:]
+    private var alternateHotKeyRefs: [HotkeySlot: EventHotKeyRef] = [:]
     private var callbacks: [HotkeySlot: () -> Void] = [:]
     private var eventHandlerRef: EventHandlerRef?
+
+    /// Carbon hotkey IDs at or above this offset are a slot's alternate shortcut.
+    private static let alternateIDOffset = 1000
 
     private init() {}
 
@@ -118,26 +126,31 @@ class HotkeyManager {
     func register(slot: HotkeySlot, callback: @escaping () -> Void) {
         callbacks[slot] = callback
 
-        // Unregister existing hotkey for this slot
-        if let ref = hotKeyRefs[slot] {
-            UnregisterEventHotKey(ref)
-            hotKeyRefs[slot] = nil
-        }
+        // Unregister existing hotkeys for this slot
+        if let ref = hotKeyRefs.removeValue(forKey: slot) { UnregisterEventHotKey(ref) }
+        if let ref = alternateHotKeyRefs.removeValue(forKey: slot) { UnregisterEventHotKey(ref) }
 
         let (keyCode, modifiers) = Self.readHotkey(for: slot)
-        guard modifiers != 0 || Self.isFunctionKey(keyCode) else { return }  // no modifiers = disabled (unless function key)
+        hotKeyRefs[slot] = registerCarbonHotkey(keyCode: keyCode, modifiers: modifiers, id: slot.rawValue)
+
+        if let alt = Self.readAlternateHotkey(for: slot), (alt.keyCode, alt.modifiers) != (keyCode, modifiers) {
+            alternateHotKeyRefs[slot] = registerCarbonHotkey(keyCode: alt.keyCode, modifiers: alt.modifiers,
+                                                             id: slot.rawValue + Self.alternateIDOffset)
+        }
+    }
+
+    private func registerCarbonHotkey(keyCode: UInt32, modifiers: UInt32, id: Int) -> EventHotKeyRef? {
+        guard modifiers != 0 || Self.isFunctionKey(keyCode) else { return nil }  // no modifiers = disabled (unless function key)
 
         installEventHandler()
         var ref: EventHotKeyRef?
-        var hotkeyID = EventHotKeyID(signature: OSType(0x4D53_4854), id: UInt32(slot.rawValue))
+        let hotkeyID = EventHotKeyID(signature: OSType(0x4D53_4854), id: UInt32(id))
 
         let status = RegisterEventHotKey(
             keyCode, modifiers, hotkeyID,
             GetApplicationEventTarget(), 0, &ref
         )
-        if status == noErr, let ref = ref {
-            hotKeyRefs[slot] = ref
-        }
+        return status == noErr ? ref : nil
     }
 
     /// Register all hotkeys with their callbacks.
@@ -173,7 +186,8 @@ class HotkeyManager {
                 GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
                                   nil, MemoryLayout<EventHotKeyID>.size, nil, &hotkeyID)
 
-                if let slot = HotkeySlot(rawValue: Int(hotkeyID.id)), let callback = mgr.callbacks[slot] {
+                if let slot = HotkeySlot(rawValue: Int(hotkeyID.id) % HotkeyManager.alternateIDOffset),
+                   let callback = mgr.callbacks[slot] {
                     os_log("CARBON HANDLER ENTERED slot=%{public}d abs=%{public}.6f isMain=%{public}@",
                            log: hotkeyLog, type: .info,
                            slot.rawValue, CFAbsoluteTimeGetCurrent(),
@@ -194,10 +208,10 @@ class HotkeyManager {
     }
 
     func unregisterAll() {
-        for (_, ref) in hotKeyRefs {
-            UnregisterEventHotKey(ref)
-        }
+        for ref in hotKeyRefs.values { UnregisterEventHotKey(ref) }
+        for ref in alternateHotKeyRefs.values { UnregisterEventHotKey(ref) }
         hotKeyRefs.removeAll()
+        alternateHotKeyRefs.removeAll()
         if let handler = eventHandlerRef {
             RemoveEventHandler(handler)
             eventHandlerRef = nil
@@ -224,6 +238,16 @@ class HotkeyManager {
             return (slot.defaultKeyCode, slot.defaultModifiers)
         }
         return (storedKey, storedMods)
+    }
+
+    /// Read a slot's optional second shortcut. Nil when unset or when the slot is disabled.
+    static func readAlternateHotkey(for slot: HotkeySlot) -> (keyCode: UInt32, modifiers: UInt32)? {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: slot.disabledKey),
+              defaults.object(forKey: slot.alternateKeyCodeKey) != nil else { return nil }
+        let keyCode = UInt32(defaults.integer(forKey: slot.alternateKeyCodeKey))
+        let modifiers = UInt32(defaults.integer(forKey: slot.alternateModifiersKey))
+        return (keyCode, modifiers)
     }
 
     /// Save a hotkey to UserDefaults.
